@@ -1,1 +1,340 @@
-This is the README
+I want to give a shoutout to ghostly_grey for working with me to solve this chal. It was definitley
+a team effort and I don't know that either of us could have done it alone!
+
+Now, the writeup. For this challenge, we are given a binary and libc. 
+The binary has the following protections:
+
+[*] '/home/a/Desktop/0ctf_2019/aegis/aegis'
+    Arch:     amd64-64-little
+    RELRO:    Full RELRO
+    Stack:    Canary found
+    NX:       NX enabled
+    PIE:      PIE enabled
+    FORTIFY:  Enabled
+    ASAN:     Enabled
+    UBSAN:    Enabled
+
+Okay so besides the normal protections, the binary is protection by Address Sanitizer!! 
+Getting past this defense is by far the most difficult part of the challenge.
+
+From reversing the binary, we see that this is a standard heap challenge. You can create a note,
+update a note, delete a note, show a note, and exit. The notes are stored a global array, and you 
+can only allocate a maximum of 10.
+
+  ___   ____ _____ _____ _______ ____ _____ _____   ____   ___  _  ___
+ / _ \ / ___|_   _|  ___/ /_   _/ ___|_   _|  ___| |___ \ / _ \/ |/ _ \
+| | | | |     | | | |_ / /  | || |     | | | |_      __) | | | | | (_) |
+| |_| | |___  | | |  _/ /   | || |___  | | |  _|    / __/| |_| | |\__, |
+ \___/ \____| |_| |_|/_/    |_| \____| |_| |_|     |_____|\___/|_|  /_/
+
+======Protected Notebook======
+1. Add note
+2. Show note
+3. Update note
+4. Delete note
+5. Exit
+Choice:
+
+There is another function, secret, which allows you to write a nullbyte anywhere into memory. 
+You can only use this function once and it can be accessed by putting the number "666" in the menu. 
+It will prove essential for our exploit, but more on that later.
+
+The first vulnerability that we found was a simple UAF. In the delete function,
+the note pointers are never nulled out like they should be. This allows an us
+to access these pointers and overwrite data that has already been freed.
+
+==4316==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010 at pc 0x555555668553 bp 0x7fffffffe310 sp 0x7fffffffe308
+READ of size 8 at 0x602000000010 thread T0
+    #0 0x555555668552  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x114552)
+    #1 0x555555668a6c  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x114a6c)
+    #2 0x7ffff6e24b96  (/lib/x86_64-linux-gnu/libc.so.6+0x21b96)
+    #3 0x55555556f8e9  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x1b8e9)
+
+0x602000000010 is located 0 bytes inside of 16-byte region [0x602000000010,0x602000000020)
+freed by thread T0 here:
+    #0 0x55555562f5f0  (/home/a/Desktop/0ctf_2019/aegis/aegis+0xdb5f0)
+    #1 0x5555556688be  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x1148be)
+    #2 0x555555668a7a  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x114a7a)
+    #3 0x7ffff6e24b96  (/lib/x86_64-linux-gnu/libc.so.6+0x21b96)
+
+previously allocated by thread T0 here:
+    #0 0x55555562f7c0  (/home/a/Desktop/0ctf_2019/aegis/aegis+0xdb7c0)
+    #1 0x555555668375  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x114375)
+    #2 0x555555668a65  (/home/a/Desktop/0ctf_2019/aegis/aegis+0x114a65)
+    #3 0x7ffff6e24b96  (/lib/x86_64-linux-gnu/libc.so.6+0x21b96)
+
+SUMMARY: AddressSanitizer: heap-use-after-free (/home/a/Desktop/0ctf_2019/aegis/aegis+0x114552)
+Shadow bytes around the buggy address:
+  0x0c047fff7fb0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x0c047fff7fc0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x0c047fff7fd0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x0c047fff7fe0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x0c047fff7ff0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=>0x0c047fff8000: fa fa[fd]fd fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff8010: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff8020: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff8030: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff8040: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff8050: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==4316==ABORTING
+
+In order to attack this vulnerability, you need to null out the byte that ASAN has poisoned.
+In the above example, it is 0x0c047fff8002. ASAN does NOT use ASLR, so we can determine the address
+of the poison byte we want to NULL out by either looking at the ASAN output, or doing a simple computation
+
+ShadowAddr = (Addr >> 3) + Offset.
+
+You can read more about ASAN at these two links:
+https://www.usenix.org/system/files/conference/atc12/atc12-final39.pdf
+https://github.com/google/sanitizers/wiki/AddressSanitizer
+
+It turns out, this UAF is not very useful to us. Why? Well, let's take a look at ASAN's Heap:
+
+ASAN Heap snapshot 1 (Before Free):
+00:0000│   0x602000000000 ◂— 0x2ffffff00000002
+01:0008│   0x602000000008 ◂— 0x2080000120000010
+02:0010│   0x602000000010 —▸ 0x60b0000000f0 ◂— 0x6161616161616161 ('aaaaaaaa')
+03:0018│   0x602000000018 —▸ 0x555555668ab0 (cfi_check) ◂— jmp    0x555555667d10
+04:0020│   0x602000000020 ◂— 0x0
+
+ASAN Heap snapshot (After Free):
+00:0000│   0x602000000000 ◂— 0x200000000000003
+01:0008│   0x602000000008 ◂— 0x2080000120000010
+02:0010│   0x602000000010 —▸ 0x60b061000001 ◂— 0x0
+03:0018│   0x602000000018 —▸ 0x555555668ab0 (cfi_check) ◂— jmp    0x555555667d10
+04:0020│   0x602000000020 ◂— 0x0
+
+In this example, we've allocated a note of size 100. The pointer in the global Notes array will be 
+0x602000000010. This address simply contains a pointer to the note's data. 
+However, you can see that after the free, this pointer become mangeled!
+Thus, we are unable to reuse this dangling pointer to our advantage as the program will just segfault.
+
+After this revelation, we continued to look for more vulnerabilities. It turns out, there is also a heap
+buffer overflow in the update function. The update function uses strlen to read in new content, but it adds a byte
+to the amount of data that can be read in. Thus, if we do multiple successive updates, we can gradually overflow an 
+object.
+
+What can we actually attack with this overflow? Well, if we are clever about the size of our notes,
+the content chunks will be place on the same page as the chunks which contain pointers to the note content.
+For example, when we allocate a chunk of size 16, ASAN's heap will look like this:
+
+00:0000│   0x602000000000 ◂— 0x2ffffff00000002
+01:0008│   0x602000000008 ◂— 0x900000120000010
+02:0010│   0x602000000010 —▸ 0xa0061616161 ◂— 0x0
+03:0018│   0x602000000018 ◂— 0xbebebe0000000000
+04:0020│   0x602000000020 ◂— 0x2ffffff00000002
+05:0028│   0x602000000028 ◂— 0x2080000120000010
+06:0030│   0x602000000030 —▸ 0x602000000010 —▸ 0xa0061616161 ◂— 0x0
+07:0038│   0x602000000038 —▸ 0x555555668ab0 (cfi_check) ◂— jmp    0x555555667d10
+
+In this example, the chunk's content begins at 0x602000000010 and the chunk which contains a data
+pointer begins at 0x602000000020.
+
+So, by using multiple updates to the same note, we can achieve an overflow of arbitrary length.
+However, we run into a problem. The addresses 0x602000000020 and 0x602000000028 have been poisoned
+by ASAN. Thus, if we want to write into one of them, we need to use the secret function and it's
+one byte null overwrite. We only get to do this once, however, so we have no chance of directly
+making it to the data pointer located at 0x602000000030 because there are two poisoned addresses
+between our content and the pointer.
+
+So, all we can attack with this overflow is the chunks metadata. So what to they bytes located at 
+0x602000000020 and 0x2080000120000010 actually mean? Well, lets take a look at the ASAN allocator's
+source code located here:
+https://github.com/llvm-mirror/compiler-rt/blob/master/lib/asan/asan_allocator.cc
+
+I've pulled out two of the most important code sections for our purposes.
+
+// The memory chunk allocated from the underlying allocator looks like this:
+// L L L L L L H H U U U U U U R R
+//   L -- left redzone words (0 or more bytes)
+//   H -- ChunkHeader (16 bytes), which is also a part of the left redzone.
+//   U -- user memory.
+//   R -- right redzone (0 or more bytes)
+// ChunkBase consists of ChunkHeader and other bytes that overlap with user
+// memory.
+
+// If the left redzone is greater than the ChunkHeader size we store a magic
+// value in the first uptr word of the memory block and store the address of
+// ChunkBase in the next uptr.
+// M B L L L L L L L L L  H H U U U U U U
+//   |                    ^
+//   ---------------------|
+//   M -- magic value kAllocBegMagic
+//   B -- address of ChunkHeader pointing to the first 'H'
+static const uptr kAllocBegMagic = 0xCC6E96B9;
+
+struct ChunkHeader {
+  // 1-st 8 bytes.
+  u32 chunk_state       : 8;  // Must be first.
+  u32 alloc_tid         : 24;
+
+  u32 free_tid          : 24;
+  u32 from_memalign     : 1;
+  u32 alloc_type        : 2;
+  u32 rz_log            : 3;
+  u32 lsan_tag          : 2;
+  // 2-nd 8 bytes
+  // This field is used for small sizes. For large sizes it is equal to
+  // SizeClassMap::kMaxSize and the actual size is stored in the
+  // SecondaryAllocator's metadata.
+  u32 user_requested_size : 29;
+  // align < 8 -> 0
+  // else      -> log2(min(align, 512)) - 2
+  u32 user_requested_alignment_log : 3;
+  u32 alloc_context_id;
+};
+
+// Every chunk of memory allocated by this allocator can be in one of 3 states:
+// CHUNK_AVAILABLE: the chunk is in the free list and ready to be allocated.
+// CHUNK_ALLOCATED: the chunk is allocated and not yet freed.
+// CHUNK_QUARANTINE: the chunk was freed and put into quarantine zone.
+enum {
+  CHUNK_AVAILABLE  = 0,  // 0 is the default value even if we didn't set it.
+  CHUNK_ALLOCATED  = 2,
+  CHUNK_QUARANTINE = 3
+};
+
+Okay, so we see that the first 29 bits of the data located at 0x602000000028 represents the 
+chunks length. Also, the first 8 bits of the metadata determine whether the chunk is 
+available, allocated, or in quarantine.
+
+Before we continue, we have to go over a very important concept of ASAN's allocator. The allocator
+is not designed to by hyper efficient, but to find bugs. Thus, it will try to avoid allocating
+valid memory over freed memory at all costs so it can catch bugs like UAF. It does this by
+putting free chunks into quarantine. Quarantined chunks are only reused after a certain amount
+of memory has been freed. The standard setting is quarantine_size_mb=256M which can be seen
+if you set the environment variable export ASAN_OPTIONS=verbosity=1. Thus, we need to free
+a HUGE amount of memory before it gets reused. 
+
+How do we do this with only 10 chunks with a maximum size of 1024? Answer: overwrite the size
+of the victim chunk with a HUGE number. From our experience, 0xffffff should do it.
+
+Now we are cookin'. By overwritting the size of the next chunk with a huge number and 
+setting the other metadata bytes properly, we can get a huge chunk of memory to be recycled.
+Thus, if we allocate some notes in this memory, we should be able to attack the UAF
+we discovered before and gain arbitrary read write across the process's address space.
+
+You might be wondering, how can we overwrite the size of the data located at 0x602000000028?
+Isn't it also poisoned? Answer: ASAN does not protect against non-qword aligned overwrite. Basically,
+we would have to write the address 0x602000000030 before ASAN would notice the overflow., since we nulled
+out the previous byte in shadow memory with the secret function.
+
+Once we are able to set the data pointer of the first chunk we allocated, we can read and write the process
+address space as we please. However, the challenge itsn't over. There is a check in the update
+function that ensures your data pointer is located in ASAN's heap
+
+ if ( *(_QWORD *)data_pointer >> 44 != 6LL )
+ 
+ Thus, we only get one write for our exploit to work. Another problem is that the stack
+ if full of junk and the only one_gadgets we have are these:
+ 
+ 0x4f2c5	execve("/bin/sh", rsp+0x40, environ)
+constraints:
+  rcx == NULL
+
+0x4f322	execve("/bin/sh", rsp+0x40, environ)
+constraints:
+  [rsp+0x40] == NULL
+
+0x10a38c	execve("/bin/sh", rsp+0x70, environ)
+constraints:
+  [rsp+0x70] == NULL
+
+It is also very difficult to find a target which will be executed between our memory write and the call to 
+error() where $RCX is null.
+
+SO, where can we write? Looking through the disassembly of the functions
+
+_asan_handle_no_return
+_ubsan_handle_cfi_check_fail_abort
+
+we see there is a call to  __sanitizer::Die().
+
+In this function, there is the code snippet:
+
+  if ( __sanitizer::UserDieCallback )
+    __sanitizer::UserDieCallback(this);
+  v2 = &__sanitizer::InternalDieCallbacks;
+  
+ Thus, if there are any UserDieCallbacks registered, they will be executed.
+ If we put one_gadget here, we will get the same issue. The stack is too full
+ of junk for the rsp+X constraints to be passed.
+ 
+ Looking at the registers when our gadget is called, we have the following state:
+ 
+ ────────────────────────────────────────────────────────────────────────────────────[ REGISTERS ]────────────────────────────────────────────────────────────────────────────────────
+ RAX  0x7ffff6ea0f05 (strsignal+165) ◂— mov    rax, rbp
+ RBX  0x555556504880 —▸ 0x5555556388b0 (__sanitizer::SuppressionContext::GetMatched(__sanitizer::InternalMmapVector<__sanitizer::Suppression*>*)+352) ◂— push   rbp
+ RCX  0x7fffffffe0a0 —▸ 0x7fffffffe150 ◂— 0x3d3d343300000003
+ RDX  0x7fffffffe0a0 —▸ 0x7fffffffe150 ◂— 0x3d3d343300000003
+ RDI  0x7fffffffe101 ◂— 0x100007fffffffe3
+ RSI  0x0
+ R8   0x6a6cb03abcebc041
+ R9   0x0
+ R10  0x0
+ R11  0x206
+ R12  0x55555556f8c0 (ptrace+7344) ◂— xor    ebp, ebp
+ R13  0x7fffffffe460 ◂— 0x1
+ R14  0x0
+ R15  0x0
+ RBP  0x555556504878 ◂— 0x0
+ RSP  0x7fffffffe2e0 ◂— 0x1
+ RIP  0x555555656148 ◂— call   rax
+ 
+ We also control the value at offset 8 in the stack shown below.
+ 
+00:0000│ rsp  0x7fffffffe2e0 ◂— 0x1
+01:0008│      0x7fffffffe2e8 —▸ 0x7ffff6f0d398 (exec_comm+2520) ◂— lea    rdi, [rip + 0xa9afb]
+02:0010│      0x7fffffffe2f0 —▸ 0x7fffffffe320 —▸ 0x7fffffffe360 —▸ 0x7fffffffe380 —▸ 0x555555668ac0 ◂— ...
+03:0018│      0x7fffffffe2f8 —▸ 0x555555667959 ◂— sub    rsp, 8
+04:0020│      0x7fffffffe300 ◂— 0x1
+05:0028│      0x7fffffffe308 —▸ 0x55555566877e ◂— mov    edi, dword ptr [rbp - 0x14]
+06:0030│      0x7fffffffe310 —▸ 0x7fffffffe320 —▸ 0x7fffffffe360 —▸ 0x7fffffffe380 —▸ 0x555555668ac0 ◂— ...
+07:0038│      0x7fffffffe318 —▸ 0x7fffffffe360 —▸ 0x7fffffffe380 —▸ 0x555555668ac0 ◂— push   r15
+
+So, RSI is already NULL and we need to set RDI to "/bin/sh" and $RDX to NULL or environ for our exploit to work.
+Looking at the following one_gadget code
+
+0x7ffff6f0d393 <exec_comm+2515>:     lea    rsi,[rsp+0x70]
+0x7ffff6f0d398 <exec_comm+2520>:     lea    rdi,[rip+0xa9afb]        # 0x7ffff6fb6e9a
+0x7ffff6f0d39f <exec_comm+2527>:     mov    rdx,QWORD PTR [rax]
+0x7ffff6f0d3a2 <exec_comm+2530>:     call   0x7ffff6ee7e30 <execve>
+
+we see that is is possible to set rdx and rdi without changing rsi before execve is called.
+However, this requires setting the correct value in rax. rax must point to NULLs, and the only
+other register that does this in the current state is rbp. Looking for a gadget in libc, we find
+
+0x000000000009df05 : mov rax, rbp ; pop rbx ; pop rbp ; ret
+
+This will set rax to rbp which points to NULL, pop twice, and return to the addres on the stack which 
+we control!
+
+Thus, if we call this gadget using the UserDieCallback
+and we only use the part of the one_gadget starting at 0x7ffff6f0d39f, we can 
+call execve("/bin/sh", NULL, NULL)
+
+Success!!! This will give us our shell AND our flag!
+flag{ASan_and_CFI_absolute_defense}
+
+Overall this challenge was definitley tough. I'd like to thank the CTF
+organizer for creating such a great challenge, it was very fun to pwn!
+
