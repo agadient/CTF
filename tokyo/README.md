@@ -1,4 +1,4 @@
-For this challenge, we are given a binary, libc, and ld. The first thing to do is use [patchelf](https://github.com/NixOS/patchelf) so that the binary will be loaded with the correct linker/libc combination. Once this is done, I checked the security levels for the program with checksec. 
+For this challenge, we are given a binary, libc, and linker. The first thing to do is use [patchelf](https://github.com/NixOS/patchelf) so that the binary will be loaded with the correct linker/libc combination. Once this is done, I checked the security levels for the program with checksec. 
 ```
     Arch:     amd64-64-little
     RELRO:    Full RELRO
@@ -6,7 +6,7 @@ For this challenge, we are given a binary, libc, and ld. The first thing to do i
     NX:       NX enabled
     PIE:      PIE enabled
  ```
- Okay, so all protections are turned on. Let's see what the program does.
+ Okay, so all protections are turned on. Let's see what the program does.  This is the output by inputing "a\n" for the first prompt and "hello\n" for the second:
  
  ```
  ./printf
@@ -17,9 +17,7 @@ Do you leave a comment?
 hello
  ```
  
- This is the output by inputing "a\n" for the first prompt and "hello\n" for the second.
- 
- By giving a quick glance at the binary in IDA, it is clear that the challenge is running printf on an uncontrolled user string twice. The twist here is that the printf is a custom implementation with %n disabled. Generating a leak is pretty easy by using the %lx format specifier. For example:
+ Giving a quick look over the binary in IDA, it is clear that the challenge is running printf on an uncontrolled user string twice. The twist here is that the printf is a custom implementation with ```%n``` disabled. Generating a leak is pretty easy by using the ```%lx``` format specifier. For example:
  
  ```
  What's your name?
@@ -30,13 +28,13 @@ Hi,
 
 As you can see, we leaked some information from the stack. We are limited to 0x100 input bytes for the first format string, so by putting in a bunch of ```%lx``` tokens, we can leak the base address of the stack, libc, binary, and canary quite easily. 
 
-Okay, with this data leaked we now need to figure out how to write. I spent a long time reversing the printf function and found two interesting things. First, the printf implementation will build the string that it eventually calls ```puts``` on in a different location than your originally provided string. Second, by using the a number after the percent format specifier (```%1000lx``` for example) we are able to adjust the stack pointer by about 1000 bytes. There is a check in the program to ensure the number we provide after the ```%``` is not negative. Thus, we cannot write up the stack and target a return pointer. 
+Okay, with the data leaked we now need to figure out how to write. I spent a long time reversing the printf function and found two interesting things. First, the printf implementation will build the string that it eventually calls ```puts``` on in a different location than your originally provided string. Second, by placing a number after the percent format specifier (```%1000lx``` for example) we are able to adjust the stack pointer by about 1000 bytes. There is a check in the program to ensure the number we provide after the ```%``` is not negative. Thus, we cannot write up the stack and target a return pointer. 
 
 I spent a lot of time experimenting with this by trying to use multiple ```%x``` specifiers to see if I could cause a negative number to be added to the stack pointer. Unfortunatley, this didn't work. However, I realized I was missing something. What is located past the end of the stack in the memory layout? Libc of course! So, by adjusting the number we put after the ```%``` specifier, we can obtain arbitrary write in libc. 
 
-When ```libc_start_main``` returns, it will call the ```exit()``` function. This is important, because a bunch of function pointers are called before the process actually exits. You can check out where this is done in the source code here: [https://code.woboq.org/userspace/glibc/stdlib/exit.c.html](https://code.woboq.org/userspace/glibc/stdlib/exit.c.html). So, all we need to do is overwrite one of these function pointers and we will have control of ```rip```!
+When ```libc_start_main``` returns, it will call the ```exit()``` function. This is important, because a bunch of function pointers are called before the process actually exits. You can check out where this is done in the source code here: [https://code.woboq.org/userspace/glibc/stdlib/exit.c.html](https://code.woboq.org/userspace/glibc/stdlib/exit.c.html). All we need to do now is overwrite one of these function pointers and we will have control of ```rip```!
 
-Before I did this, I checked to see if there were any useful one\_gadgets in the libc we were given. Using the awesome tool one\_gadget, was able to easily find 4!
+Before I did this, I checked to see if there were any useful one\_gadgets in the libc we were given. Using the awesome tool [one\_gadget](https://github.com/david942j/one_gadget), was able to easily find 4!
 
 ```
 one_gadget libc.so.6
@@ -116,6 +114,6 @@ LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA
 Program received signal SIGSEGV (fault address 0x0)
 ```
 
-Luckily, both RCX and RDX are NULL at the time of the crash! So, all we have to do is write the one\_gadget located at offset 0xe2383 to the location of the function pointer, 0x7ffff7fc76c8, in libc and we will get a shell!
+Luckily, both RCX and RDX are NULL at the time of the crash! All we have to do is write the one\_gadget located at offset 0xe2383 to the location of the function pointer (0x7ffff7fc76c8) in libc and we will get a shell!
 
 That's it! From here, you just run the script and get a flag! TWCTF{Pudding_Pudding_Pudding_purintoehu}
