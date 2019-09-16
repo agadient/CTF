@@ -34,7 +34,7 @@ I spent a lot of time experimenting with this by trying to use multiple ```%x```
 
 When ```libc_start_main``` returns, it will call the ```exit()``` function. This is important, because a bunch of function pointers are called before the process actually exits. You can check out where this is done in the source code here: [https://code.woboq.org/userspace/glibc/stdlib/exit.c.html](https://code.woboq.org/userspace/glibc/stdlib/exit.c.html). All we need to do now is overwrite one of these function pointers and we will have control of ```rip```!
 
-Before I did this, I checked to see if there were any useful one\_gadgets in the libc we were given. Using the awesome tool [one\_gadget](https://github.com/david942j/one_gadget), was able to easily find 4!
+Before I did this, I checked to see if there were any useful one\_gadgets in the libc we were given. Using the awesome tool [one\_gadget](https://github.com/david942j/one_gadget), I was able to easily find 4!
 
 ```
 one_gadget libc.so.6
